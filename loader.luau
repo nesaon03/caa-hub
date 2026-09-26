@@ -27,7 +27,7 @@ local JCFG = {
 
     -- Where the hub comes from -------------------------------------------
     hub_local  = "CAAHub/hub.luau",   -- read from the executor workspace
-    hub_url    = "",                  -- set a URL to load remotely instead
+    hub_url    = "https://raw.githubusercontent.com/nesaon03/caa-hub/main/hub.luau",
 
     -- Cache ---------------------------------------------------------------
     key_file   = "CAAHub/key.txt",
@@ -167,26 +167,34 @@ end
 --------------------------------------------------------------------------
 -- HUB
 --------------------------------------------------------------------------
+-- runs a hub source string; returns ok, err
+local function run_hub(src, from)
+    if type(src) ~= "string" or #src < 100 then
+        return false, "Hub source too short (" .. tostring(from) .. ")"
+    end
+    local fn, err = loadstring(src, "CAAHub")
+    if not fn then return false, "Hub compile error: " .. tostring(err) end
+    local ok, err2 = pcall(fn)
+    if ok then log("hub source:", from, #src, "bytes") end
+    return ok, err2
+end
+
 local function load_hub()
+    -- remote first, local file as fallback so an outage or an offline box
+    -- still runs
     if JCFG.hub_url ~= "" then
         local ok, src = pcall(function() return game:HttpGet(JCFG.hub_url) end)
-        if not ok or type(src) ~= "string" or #src < 100 then
-            return false, "Hub download failed"
+        if ok and type(src) == "string" and #src >= 100 then
+            return run_hub(src, "remote")
         end
-        local fn, err = loadstring(src, "CAAHub")
-        if not fn then return false, "Hub compile error: " .. tostring(err) end
-        local ok2, err2 = pcall(fn)
-        return ok2, err2
+        log("remote hub failed, trying local file")
     end
 
     local ok, src = pcall(function() return readfile(JCFG.hub_local) end)
     if not ok or type(src) ~= "string" or #src < 100 then
         return false, "Hub not found at " .. JCFG.hub_local
     end
-    local fn, err = loadstring(src, "CAAHub")
-    if not fn then return false, "Hub compile error: " .. tostring(err) end
-    local ok2, err2 = pcall(fn)
-    return ok2, err2
+    return run_hub(src, "local")
 end
 
 --------------------------------------------------------------------------
