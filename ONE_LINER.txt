@@ -1,0 +1,33 @@
+========================================================================
+  COMMAND AN ARMY  --  ONE LINE TO SEND USERS
+========================================================================
+
+Paste this in your executor:
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/nesaon03/caa-hub/main/loader.luau"))()
+
+That is the whole distribution. What the user sees:
+  1. KEY REQUIRED window opens
+  2. they press GET KEY -> their key link is copied to clipboard
+  3. they paste a key -> it checks as they type
+  4. valid key -> window closes, hub loads (6 tabs)
+  5. key is cached for 1 hour, so re-execute is instant
+
+Before handing this out, delete the key cache on the machine you are
+handing it to, or the old key stays valid for an hour:
+
+  C:\Users\<user>\AppData\Local\Real\workspace\CAAHub\key.txt
+
+========================================================================
+  UPDATING THE HUB LATER
+========================================================================
+The loader pulls hub.luau from the same repo every run, so to push an
+update you only re-upload hub.luau:
+
+  cd C:\Users\cheating\AppData\Local\Real\workspace\CAAHub
+  git add hub.luau
+  git commit -m "update"
+  git push
+
+Users get it on their next execute. As long as the RAW URL stays the
+same, nobody has to change the one-liner.
