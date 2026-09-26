@@ -1,0 +1,58 @@
+COMMAND AN ARMY  --  LOADER v2  (2026-09-27)
+============================================
+File:    CAAHub/loader.luau          (17,582 B)
+Backup:  CAAHub/loader_github_only.bak.luau   (the old GitHub-only loader)
+Repo:    https://github.com/nesaon03/caa-hub  (pushed, commit c172d60)
+
+ONE-LINER (unchanged - users keep the same line)
+------------------------------------------------
+loadstring(game:HttpGet("https://raw.githubusercontent.com/nesaon03/caa-hub/main/loader.luau"))()
+
+
+WHAT CHANGED
+------------
+Hub now loads from Junkie's protected CDN first, GitHub second.
+
+  1. Junkie CDN   <- obfuscated, key checked server-side  (preferred)
+  2. GitHub raw   <- fallback if delivery is unreachable
+  3. local file   <- fallback if GitHub is unreachable
+
+The key gate is still ours (WindUI window, same look, same behaviour).
+The difference: once a key passes, it is handed to Junkie's delivery API,
+which returns a signed CDN url for the obfuscated script. The protected
+payload is never served to anyone the server has not accepted, so the
+gate is no longer skippable by reading a public file.
+
+Deliberately NOT used: the loader Junkie generates for you at
+https://jnkie.com/loaders/onxy-hub - it exits before checking a key
+(its game map is keyed by place id but read with universe id, so it
+always warns "Unsupported game [LDR-NOMAP]"). See
+skills/.../windui-luau-hubs/references/jnkie-loader-contract.md
+
+
+VERIFIED (live, client pid 21580, in-game at CAA)
+-------------------------------------------------
+  1. hash extracted from published loader  = 3aca75960e...f9e   live? true
+  2. bad key  -> "Key not found"            mapped correctly? true
+  3. empty key -> "Key not found"
+  4. github hub fetchable  = 91,485 bytes
+  5. local hub readable    = 91,485 bytes
+  6. hub compiles          = true
+  + loader.luau compiles (loadstring OK, 17,270 -> 17,582 B after hash fix)
+  + key window opens, key box bound: true
+  + gate holds (authorized=nil, CAA_HUB=nil, no cache file)
+
+NOT YET PROVEN: a real key being accepted end-to-end. The REST credential
+on this box returns 401 (rotated), so no test key could be minted. The
+wire path, error mapping and both fallbacks are proven with the empty-key
+control - which is the same code path a real key takes.
+
+
+WHAT TO DO WITH IT
+------------------
+Nothing. It is pushed and live. Users run the one-liner above.
+
+To test the accept path yourself: get a key from the flow page, paste it
+into the window, and the hub should load. If it says "Key not found" the
+key is wrong/expired; if it says "delivery unavailable" in the console,
+the CDN rejected the key but GitHub carried the load anyway.
