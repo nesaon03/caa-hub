@@ -1,18 +1,17 @@
 --[[ =======================================================================
-     COMMAND AN ARMY  --  LOADER  (v2)
-     Place 101770480176177   universe 10258991999
+     COMMAND AN ARMY  --  KEY SYSTEM LOADER
+     Place 92949164250558   universe 10258991999
 
-     Loads the hub in this order:
-       1. Junkie CDN (obfuscated, key-protected)  <- preferred
-       2. GitHub raw hub.luau                     <- fallback
+     This is the script you hand out / paste. It:
+       1. checks a saved key (file cache, 1h TTL)
+       2. opens a key window if needed
+       3. validates through Junkie (ONYX HUB)
+       4. loads the hub ONLY after the key passes
 
-     Key gate is ours: WindUI window, validates through the Junkie SDK,
-     then hands the key to the Junkie delivery API to fetch the
-     obfuscated script. Nothing about the key system is bypassable by
-     reading this file - the protected payload is only served by the
-     backend after a key check.
-
-     CONFIG IS AT THE TOP. see JCFG.
+     CONFIG IS AT THE TOP. The only value you must fill in is
+     JCFG.identifier  (your numeric JUNKIE DASHBOARD user id).
+     While identifier == "0" the loader runs in MOCK mode so you can
+     test the whole UI without a real key.
      ======================================================================= ]]
 
 --------------------------------------------------------------------------
@@ -20,28 +19,24 @@
 --------------------------------------------------------------------------
 local JCFG = {
     -- Junkie (key system) ------------------------------------------------
-    library     = "https://jnkie.com/sdk/library.lua",
-    service     = "ONYX HUB",
-    provider    = "test",
-    identifier  = "1177507",   -- Junkie dashboard user id
+    library    = "https://jnkie.com/sdk/library.lua",
+    service    = "ONYX HUB",
+    provider   = "test",
+    identifier = "1177507",  -- Junkie dashboard user id
+    -- identifier = "0" runs MOCK mode: any 8+ char key is accepted.
 
-    -- Protected delivery -------------------------------------------------
-    -- The loader the dashboard generates is read at runtime so the script
-    -- hash below never goes stale after a re-obfuscate. To force a value,
-    -- set script_hash and clear loader_url.
-    loader_url  = "https://jnkie.com/loaders/onxy-hub",
-    script_hash = "3aca75960eb60be1144fe4727952badd1199f4a30dd69d1243ced2d19f7dcf9e",
-    api_deliver = "https://api.jnkie.com/api/v1/luascripts/delivery/",
-
-    -- Fallback hub -------------------------------------------------------
-    hub_local   = "CAAHub/hub.luau",
-    hub_url     = "https://raw.githubusercontent.com/nesaon03/caa-hub/main/hub.luau",
+    -- Where the hub comes from -------------------------------------------
+    hub_local  = "CAAHub/hub.luau",   -- read from the executor workspace
+    hub_url    = "https://raw.githubusercontent.com/nesaon03/caa-hub/main/hub.luau",
 
     -- Cache ---------------------------------------------------------------
-    key_file    = "CAAHub/key.txt",
-    cache_secs  = 3600,
-    remember    = true,
+    key_file   = "CAAHub/key.txt",
+    cache_secs = 3600,       -- re-validate a saved key every hour
+    remember   = true,       -- offer to save the key
+    mock       = nil,        -- nil = auto (true while identifier == "0")
 }
+
+JCFG.mock = (JCFG.mock ~= nil) and JCFG.mock or (tostring(JCFG.identifier) == "0")
 
 local THEME = "Dark"
 local TITLE = "COMMAND AN ARMY"
@@ -50,7 +45,7 @@ local function log(...)
     print("[KEY] " .. table.concat({ ... }, " "))
 end
 
--- only the newest loader instance may act
+-- only the newest loader instance may act: re-executing retires the old one
 local G = (getgenv().__caaLoaderGen or 0) + 1
 getgenv().__caaLoaderGen = G
 local function current()
@@ -79,31 +74,6 @@ do
         end
     end)
     if ok then log("stale key windows cleared") end
-end
-
---------------------------------------------------------------------------
--- HTTP
---------------------------------------------------------------------------
-local function request_lib()
-    return (type(syn) == "table" and syn.request)
-        or (type(request) == "function" and request)
-        or (type(http_request) == "function" and http_request)
-        or (type(http) == "table" and http.request)
-end
-
--- blocking request with a timeout; returns ok, response
-local function fetch(tbl, secs)
-    local r = request_lib()
-    if not r then return false, nil end
-    local done, a, b = false, nil, nil
-    task.spawn(function()
-        a, b = pcall(r, tbl)
-        done = true
-    end)
-    local t0 = os.clock()
-    repeat task.wait() until done or (os.clock() - t0) > (secs or 20)
-    if not done then return false, nil end
-    return a, b
 end
 
 --------------------------------------------------------------------------
@@ -156,13 +126,13 @@ do
     end
 end
 
+-- documented backend errors -> friendly text
 local ERRORS = {
     KEY_INVALID       = "Key not found",
     KEY_EXPIRED       = "Key expired",
     KEY_INVALIDATED   = "Key was disabled",
     ALREADY_USED      = "One-time key already used",
     HWID_MISMATCH     = "HWID limit reached",
-    HWID_BANNED       = "Hardware banned",
     SERVICE_NOT_FOUND = "Service misconfigured",
     SERVICE_MISMATCH  = "Key is for a different service",
     PREMIUM_REQUIRED  = "Premium key required",
@@ -175,7 +145,13 @@ local function validate(key)
     if type(key) ~= "string" then return false, "Enter a key", false end
     key = key:gsub("%s+", "")
     if #key < 8 then return false, "Too short", false end
-    if not Junkie then return false, "Cannot reach key server", false end
+
+    if JCFG.mock then
+        return true, "MOCK OK (identifier unset)", false
+    end
+    if not Junkie then
+        return false, "Cannot reach key server", false
+    end
 
     local ok, res = pcall(function() return Junkie.check_key(key) end)
     if not ok or type(res) ~= "table" then
@@ -189,70 +165,9 @@ local function validate(key)
 end
 
 --------------------------------------------------------------------------
--- PROTECTED PAYLOAD  (Junkie CDN)
---------------------------------------------------------------------------
--- read the live loader once so a re-obfuscate cannot leave us holding a
--- stale hash; the baked value is only a fallback
-local function script_hash()
-    if JCFG.loader_url == "" then return JCFG.script_hash end
-    local ok, src = pcall(function() return game:HttpGet(JCFG.loader_url) end)
-    if ok and type(src) == "string" then
-        -- the hash sits in the loader's own table, e.g.
-        --   local S,P,G={"3aca..."},{},{[placeId]=1}
-        -- so do not anchor on "S=" - match the table head, then fall back
-        -- to the first long hex string anywhere in the source
-        local h = src:match('S%s*,%s*P[^=]*=%s*{%s*"([0-9a-fA-F]+)"')
-              or src:match('"([0-9a-fA-F]{32,64})"')
-        if h and #h >= 32 then return h end
-    end
-    return JCFG.script_hash
-end
-
--- POST the key, get a cdn url back, then pull the obfuscated script.
--- returns source string, or nil + reason
-local function fetch_protected(key)
-    local hash = script_hash()
-    local url = JCFG.api_deliver .. hash .. "?v=2&errors=text"
-    local ok, res = fetch({
-        Url     = url,
-        Method  = "POST",
-        Headers = { ["Content-Type"] = "text/plain" },
-        Body    = key,
-    }, 25)
-    if not ok or type(res) ~= "table" or type(res.StatusCode) ~= "number" then
-        return nil, "network"
-    end
-
-    local body = type(res.Body) == "string" and res.Body or ""
-
-    if res.StatusCode ~= 200 then
-        -- LDR-DENIED:CODE \n human readable line
-        local code, msg = body:match("^(LDR%-DENIED:[A-Z_]+)\n(.*)$")
-        if code then
-            local e = code:gsub("^LDR%-DENIED:", "")
-            return nil, ERRORS[e] or msg
-        end
-        if res.StatusCode == 400 or res.StatusCode == 401 or res.StatusCode == 403 then
-            return nil, ERRORS.KEY_INVALID
-        end
-        return nil, "server " .. tostring(res.StatusCode)
-    end
-
-    if body:sub(1, 22) ~= "https://cdn.jnkie.com/" then
-        return nil, "bad delivery"
-    end
-
-    local ok2, res2 = fetch({ Url = body, Method = "GET" }, 40)
-    if not ok2 or type(res2) ~= "table" or res2.StatusCode ~= 200
-       or type(res2.Body) ~= "string" or #res2.Body == 0 then
-        return nil, "cdn fetch failed"
-    end
-    return res2.Body, nil
-end
-
---------------------------------------------------------------------------
 -- HUB
 --------------------------------------------------------------------------
+-- runs a hub source string; returns ok, err
 local function run_hub(src, from)
     if type(src) ~= "string" or #src < 100 then
         return false, "Hub source too short (" .. tostring(from) .. ")"
@@ -264,43 +179,38 @@ local function run_hub(src, from)
     return ok, err2
 end
 
-local function load_hub(key)
-    -- 1. obfuscated, key checked server side
-    local src, why = fetch_protected(key)
-    if src then
-        local ok, err = run_hub(src, "jnkie-cdn")
-        if ok then return true end
-        log("cdn hub failed: " .. tostring(err) .. " - trying github")
-    else
-        log("delivery unavailable (" .. tostring(why) .. ") - trying github")
-    end
-
-    -- 2. github raw, then local file
+local function load_hub()
+    -- remote first, local file as fallback so an outage or an offline box
+    -- still runs
     if JCFG.hub_url ~= "" then
-        local ok, s = pcall(function() return game:HttpGet(JCFG.hub_url) end)
-        if ok and type(s) == "string" and #s >= 100 then
-            return run_hub(s, "github")
+        local ok, src = pcall(function() return game:HttpGet(JCFG.hub_url) end)
+        if ok and type(src) == "string" and #src >= 100 then
+            return run_hub(src, "remote")
         end
-        log("github hub failed - trying local file")
+        log("remote hub failed, trying local file")
     end
 
-    local ok, s = pcall(function() return readfile(JCFG.hub_local) end)
-    if not ok or type(s) ~= "string" or #s < 100 then
+    local ok, src = pcall(function() return readfile(JCFG.hub_local) end)
+    if not ok or type(src) ~= "string" or #src < 100 then
         return false, "Hub not found at " .. JCFG.hub_local
     end
-    return run_hub(s, "local")
+    return run_hub(src, "local")
 end
 
 --------------------------------------------------------------------------
 -- MAIN
 --------------------------------------------------------------------------
-local function start_hub(key)
+local function start_hub()
     if not current() then return false end
     getgenv().__caaAuthorized = true
-    local ok, err = load_hub(key)
+    local ok, err = load_hub()
     if ok then
         pcall(function()
-            WindUI:Notify({ Title = TITLE, Content = "Hub loaded", Duration = 4 })
+            WindUI:Notify({
+                Title = TITLE,
+                Content = "Hub loaded",
+                Duration = 4,
+            })
         end)
         log("hub loaded")
     else
@@ -322,7 +232,7 @@ if cached then
     local ok, msg = validate(cached)
     if ok then
         log("saved key ok ->", msg)
-        return start_hub(cached)
+        return start_hub()
     end
     log("saved key rejected:", msg)
     cache_clear()
@@ -350,7 +260,9 @@ local Sec = Tab:Section({ Title = "ENTER YOUR KEY", Icon = "key-round" })
 
 Sec:Paragraph({
     Title = "Key Required",
-    Desc  = "Paste your ONYX HUB key. It checks automatically as you type.",
+    Desc  = JCFG.mock
+        and "MOCK MODE - identifier is unset, any 8+ char key works."
+        or  "Paste your ONYX HUB key. It checks automatically as you type.",
 })
 
 local status
@@ -358,15 +270,18 @@ local function set_status(text)
     if status then status:SetDesc(text) end
 end
 
--- WindUI's Input callback reports its own internal state and can fire with
--- an empty string while the TextBox visibly holds a key, so bind straight
--- to the TextBox and read its Text.
+-- pending holds the newest text seen in the key box; auto-validate reads it.
+-- WindUI's Input Callback is NOT trustworthy: it reports its own internal state
+-- and fires with an empty string even when the TextBox visibly holds a key, and
+-- Input.Value only updates through WindUI's own Set path. So we bind straight to
+-- the TextBox the element owns and read its Text.
 local pending, pendingAt = nil, 0
 
 local box = Sec:Input({
     Title       = "Key",
     Placeholder = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
     Callback    = function(v)
+        -- keep this as a fallback only; the TextBox hook below is authoritative
         if type(v) == "string" and #v >= 8 then
             pending   = v:gsub("%s+", "")
             pendingAt = os.clock()
@@ -374,6 +289,7 @@ local box = Sec:Input({
     end,
 })
 
+-- bind to the real TextBox (ElementFrame owns it) -------------------------
 local function bind_box()
     local ef = box and box.ElementFrame
     if not ef then return false end
@@ -386,6 +302,7 @@ local function bind_box()
         pending   = (tb.Text or ""):gsub("%s+", "")
         pendingAt = os.clock()
     end)
+    -- expose so tests / the VALIDATE button can drive it programmatically
     getgenv().__caaKeyBox = tb
     return true
 end
@@ -394,6 +311,7 @@ do
     local ok, bound = pcall(bind_box)
     log("key box bound:", tostring(ok and bound or false))
     if not (ok and bound) then
+        -- retry a few frames: the element may not be parented yet
         task.spawn(function()
             for _ = 1, 40 do
                 task.wait(0.1)
@@ -455,6 +373,10 @@ Sec:Button({
     Title = "GET KEY",
     Icon  = "external-link",
     Callback = function()
+        if JCFG.mock then
+            set_status("Mock mode - no link needed")
+            return
+        end
         set_status("Fetching link...")
         local link, err = Junkie and Junkie.get_key_link()
         if link then
@@ -485,6 +407,8 @@ task.spawn(function()
             return
         end
         if Win.Destroyed or Win.Closed then done = true break end
+        -- read the live TextBox first: the property signal that feeds
+        -- `pending` is not always delivered, so never rely on it alone
         local v = pending
         local tb = getgenv().__caaKeyBox
         if tb then
@@ -521,4 +445,4 @@ if not granted then
     return
 end
 
-start_hub(getgenv().SCRIPT_KEY)
+start_hub()
